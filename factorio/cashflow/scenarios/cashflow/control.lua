@@ -1,0 +1,1 @@
+-- Intentionally empty: the cashflow mod's control.lua runs this scenario.

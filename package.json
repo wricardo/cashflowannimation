@@ -1,0 +1,10 @@
+{
+  "name": "cash-flow-animation",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "test:factorio": "lua factorio/tests/run.lua",
+    "package:factorio": "bash factorio/scripts/package.sh"
+  }
+}

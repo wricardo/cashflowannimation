@@ -1,0 +1,9 @@
+{
+  "name": "cashflow",
+  "version": "0.1.0",
+  "title": "Cashflow Factory",
+  "author": "wricardo",
+  "factorio_version": "2.0",
+  "dependencies": ["base >= 2.0"],
+  "description": "Personal finance as a factory. Iron plates are cash, copper plates are debt. Route your paycheck through needs, wants, debt and investments with belts. Play the bundled 'cashflow' scenario."
+}
