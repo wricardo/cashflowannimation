@@ -8,16 +8,26 @@ end
 
 local MONTH = 3600
 
-local function start()
-  local h = fake.install()
+local function start(opts)
+  local h = fake.install(opts)
   h.init()
   local cf = storage.cf
   local player = h.add_player()
   return h, cf, player
 end
 
-local function press_start(h, player)
-  h.fire("on_gui_click", { player_index = player.index, element = { name = "cf_toggle" } })
+local function press(h, player, name)
+  h.fire("on_gui_click", { player_index = player.index, element = { name = name } })
+end
+
+local function line(belt, i, cap)
+  local l = belt.get_transport_line(i or 1)
+  l.cap = cap or 100000
+  return l
+end
+
+local function ledger(cf)
+  return cf.entities.debt.landmark.get_inventory().get_item_count("copper-plate")
 end
 
 local T = {}
@@ -32,8 +42,8 @@ end
 function T.setup_seeds_vault_ledger_and_player()
   local _, cf, player = start()
   eq(cf.entities.vault.chest.get_inventory().get_item_count("iron-plate"), 1200)
-  eq(cf.entities.debt.landmark.get_inventory().get_item_count("copper-plate"), 1800)
-  eq(cf.entities.needs.splitter.splitter_output_priority, "right")
+  eq(ledger(cf), 1800)
+  eq(cf.entities.debt.splitter.splitter_output_priority, "right")
   assert(player.gui.left.cf_panel, "panel created")
   eq(player.inventory.get_item_count("transport-belt"), 400)
   eq(player.inventory.get_item_count("cf-meter-belt"), 1)
@@ -44,79 +54,124 @@ function T.clock_paused_until_start()
   local h, cf = start()
   h.run_ticks(MONTH * 2)
   eq(cf.month, 0)
-  eq(cf.paycheck_emitted, 0)
+  eq(cf.emitted.paycheck, 0)
 end
 
-function T.unconnected_month_borrows_everything()
+function T.emitters_put_cash_and_bills_on_belts()
   local h, cf, player = start()
-  press_start(h, player)
+  press(h, player, "cf_toggle")
+  h.run_ticks(MONTH / 2)
+  eq(cf.entities.paycheck.out.get_transport_line(1).get_item_count("iron-plate"), 4)
+  eq(cf.entities.needs.out.get_transport_line(1).get_item_count("copper-plate"), 4)
+  eq(cf.entities.wants.out.get_transport_line(2).get_item_count("copper-plate"), 4)
+end
+
+function T.unbelted_bills_are_charged_to_debt()
+  local h, cf, player = start()
+  press(h, player, "cf_toggle")
   h.run_ticks(MONTH)
   eq(cf.month, 1)
-  -- $18,000 + $2,800 unpaid expenses + $270 interest
-  eq(cf.debt_cents, 1800000 + 280000 + 27000)
-  eq(cf.entities.debt.landmark.get_inventory().get_item_count("copper-plate"), 2107)
-  -- 8 plates fit on the paycheck belt stub, the rest waits as idle cash
-  eq(cf.paycheck_buffer, 492)
-  -- $70 return is queued at the pulse and placed on the vault output at the next sweep
-  eq(cf.last_report.return_plates, 7)
-  eq(cf.vault_out_buffer, 7)
+  -- 8 copper fit on each stub; the rest of $2,000 needs + $800 wants couldn't be placed
+  eq(cf.last_report.collected_plates, 192 + 72)
+  eq(cf.debt_cents, 1800000 + 264000)
+  eq(ledger(cf), 2064)
+  -- interest is a copper bill waiting at the Debt station, not added to debt yet
+  eq(cf.out.interest, 27)
+  eq(cf.out.returns, 7)
+  eq(cf.out.paycheck, 492, "cash that couldn't be placed stays idle, never charged")
   assert(h.logs[#h.logs]:match("^%[cashflow%] month=1 "), "pulse logged")
-  h.run_ticks(6)
-  eq(cf.vault_out_buffer, 0)
 end
 
-function T.fed_drains_stop_at_quota_and_payments_reduce_debt()
+function T.unbelted_interest_compounds_next_month()
   local h, cf, player = start()
-  press_start(h, player)
-  local needs_end = cf.entities.needs.drain_end.get_transport_line(1)
-  local wants_end = cf.entities.wants.drain_end.get_transport_line(1)
-  local debt_end = cf.entities.debt.drain_end.get_transport_line(1)
-  needs_end.cap, wants_end.cap, debt_end.cap = 1000, 1000, 1000
-  needs_end.count, wants_end.count, debt_end.count = 250, 80, 30
+  press(h, player, "cf_toggle")
+  h.run_ticks(MONTH * 2)
+  -- 8 of the 27 interest plates fit on INTEREST OUT, 19 were charged; needs/wants stubs already full
+  eq(cf.last_report.collected_plates, 200 + 80 + 19)
+end
+
+function T.cashflow_pairs_iron_with_copper()
+  local h, cf, player = start()
+  press(h, player, "cf_toggle")
+  line(cf.entities.cashflow.cash_in).put("iron-plate", 250)
+  line(cf.entities.cashflow.cash_in, 2).put("copper-plate", 20)
+  line(cf.entities.cashflow.bills_in).put("copper-plate", 100)
+  h.run_ticks(2)
+  eq(cf.stats.paid, 120)
+  eq(cf.node.iron, 130)
+  eq(cf.node.copper, 0)
+  eq(cf.consumed_total_cents, 120000)
+  h.run_ticks(MONTH - 2)
+  eq(cf.last_report.surplus_plates, 130)
+  eq(cf.out.surplus, 130)
+  eq(cf.node.iron, 0)
+end
+
+function T.cashflow_leftover_bills_come_out_unpaid()
+  local h, cf, player = start()
+  press(h, player, "cf_toggle")
+  line(cf.entities.cashflow.bills_in).put("copper-plate", 50)
   h.run_ticks(MONTH)
-  eq(cf.month, 1)
-  eq(needs_end.count, 50, "needs leaves plates past quota on the belt")
-  eq(cf.last_report.deficit_cents, 0)
-  eq(cf.last_report.debt_paid_plates, 30)
-  eq(cf.debt_cents, 1800000 - 30000 + 27000)
-  assert(cf.goals.needs_fed and cf.goals.wants_fed and cf.goals.first_payment)
+  eq(cf.last_report.unpaid_plates, 50)
+  eq(cf.out.unpaid, 50)
+end
+
+function T.copper_borrows_and_iron_pays_down()
+  local h, cf, player = start()
+  press(h, player, "cf_toggle")
+  line(cf.entities.debt.borrow_in).put("copper-plate", 10)
+  line(cf.entities.debt.pay_in).put("iron-plate", 30)
+  h.run_ticks(2)
+  eq(cf.debt_cents, 1800000 + 10000 - 30000)
+  eq(ledger(cf), 1780)
+  eq(cf.stats.borrowed, 10)
+  eq(cf.stats.debt_paid, 30)
+end
+
+function T.no_debt_leaves_iron_on_pay_belt()
+  local h, cf, player = start({ settings = { ["cf-starting-debt"] = 0 } })
+  press(h, player, "cf_toggle")
+  local pay = line(cf.entities.debt.pay_in)
+  pay.put("iron-plate", 5)
+  h.run_ticks(4)
+  eq(pay.get_item_count("iron-plate"), 5)
+  eq(cf.debt_cents, 0)
 end
 
 function T.vault_deposits_move_into_chest()
   local h, cf, player = start()
-  press_start(h, player)
-  local vin = cf.entities.vault.in_end.get_transport_line(2)
-  vin.count = 4
-  h.run_ticks(12)
-  eq(vin.count, 0)
+  press(h, player, "cf_toggle")
+  line(cf.entities.vault.deposit_in, 2).put("iron-plate", 4)
+  h.run_ticks(2)
   eq(cf.entities.vault.chest.get_inventory().get_item_count("iron-plate"), 1204)
   assert(cf.goals.first_deposit)
 end
 
-function T.hand_picked_plates_return_to_paycheck()
+function T.hand_picked_plates()
   local h, cf, player = start()
   player.inventory.insert({ name = "iron-plate", count = 5 })
+  player.inventory.insert({ name = "copper-plate", count = 3 })
   h.fire("on_player_main_inventory_changed", { player_index = player.index })
   eq(player.inventory.get_item_count("iron-plate"), 0)
-  eq(cf.paycheck_buffer, 5)
+  eq(player.inventory.get_item_count("copper-plate"), 0)
+  eq(cf.out.paycheck, 5)
+  eq(cf.debt_cents, 1800000 + 3000)
 end
 
 function T.win_and_quit_job()
-  local h = fake.install({ settings = { ["cf-starting-debt"] = 0, ["cf-starting-assets"] = 480000 } })
-  h.init()
-  local cf = storage.cf
-  local player = h.add_player()
-  cf.entities.needs.drain_end.get_transport_line(1).cap = 1000
-  cf.entities.needs.drain_end.get_transport_line(1).count = 200
-  cf.entities.wants.drain_end.get_transport_line(1).cap = 1000
-  cf.entities.wants.drain_end.get_transport_line(1).count = 80
-  press_start(h, player)
+  local h, cf, player = start({ settings = { ["cf-starting-debt"] = 0, ["cf-starting-assets"] = 480000 } })
+  -- pretend Needs and Wants are belted somewhere so no bills are charged to debt
+  for _, key in ipairs({ "needs", "wants" }) do
+    line(cf.entities[key].out, 1)
+    line(cf.entities[key].out, 2)
+  end
+  press(h, player, "cf_toggle")
   h.run_ticks(MONTH)
-  assert(cf.won, "financially independent with $480k at 7% and $2,800 expenses")
+  assert(cf.won, "financially independent with $480k at 7% and $2,800 bills")
   assert(player.gui.left.cf_panel.cf_buttons.cf_quit_job.visible, "quit button shown")
-  h.fire("on_gui_click", { player_index = player.index, element = { name = "cf_quit_job" } })
+  press(h, player, "cf_quit_job")
   h.run_ticks(MONTH)
-  eq(cf.last_report.paycheck_plates, 0)
+  eq(cf.last_report.paycheck, 0)
 end
 
 return T

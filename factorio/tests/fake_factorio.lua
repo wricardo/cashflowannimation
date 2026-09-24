@@ -22,23 +22,34 @@ local function new_inventory()
   return inv
 end
 
--- A belt lane that holds up to `cap` plates.
+-- A belt lane that holds up to `cap` items in total.
 local function new_line(cap)
-  local line = { count = 0, cap = cap }
-  function line.insert_at_back()
-    if line.count < line.cap then
-      line.count = line.count + 1
+  local line = { items = {}, cap = cap }
+  local function total()
+    local n = 0
+    for _, c in pairs(line.items) do
+      n = n + c
+    end
+    return n
+  end
+  function line.put(name, n)
+    line.items[name] = (line.items[name] or 0) + n
+  end
+  function line.insert_at_back(stack)
+    if total() < line.cap then
+      line.put(stack.name, 1)
       return true
     end
     return false
   end
   function line.remove_item(stack)
-    local n = math.min(line.count, stack.count)
-    line.count = line.count - n
+    local have = line.items[stack.name] or 0
+    local n = math.min(have, stack.count)
+    line.items[stack.name] = have - n
     return n
   end
-  function line.get_item_count()
-    return line.count
+  function line.get_item_count(name)
+    return line.items[name] or 0
   end
   function line.get_detailed_contents()
     return {}

@@ -19,81 +19,107 @@ function M.clean_area(surface, area)
   surface.destroy_decoratives({ area = area })
 end
 
-local function lock(e)
+local function place(surface, name, x, y, direction)
+  local e = surface.create_entity({ name = name, position = { x, y }, direction = direction, force = "player" })
   e.destructible = false
   e.operable = false
   e.rotatable = false
   return e
 end
 
-local function place(surface, name, x, y, direction)
-  local e = surface.create_entity({
-    name = name,
-    position = { x, y },
-    direction = direction,
-    force = "player",
-  })
-  return lock(e)
-end
-
 local function belt(surface, tx, ty)
   return place(surface, "cf-belt", tx + 0.5, ty + 0.5, defines.direction.east)
 end
 
--- landmark → belts east. Script places plates at the back of the first belt.
-local function build_source(surface, s)
-  local landmark = place(surface, "cf-landmark", s.x + 0.5, s.y + 0.5)
-  local first = belt(surface, s.x + 1, s.y)
-  belt(surface, s.x + 2, s.y)
-  belt(surface, s.x + 3, s.y)
-  return { landmark = landmark, out_first = first, input_at = { s.x + 1, s.y }, output_at = { s.x + 4, s.y } }
+local function chest(surface, name, tx, ty)
+  return place(surface, name, tx + 0.5, ty + 0.5)
 end
 
--- in belts → splitter; right lane goes to the drain stub (priority), left lane passes through.
--- Script removes plates from the drain stub's last belt; when it stops, the stub backs up
--- and the splitter sends everything to the pass-through side.
-local function build_drain(surface, s)
-  local x, y = s.x, s.y
-  belt(surface, x, y)
-  belt(surface, x + 1, y)
-  local splitter = place(surface, "cf-splitter", x + 2.5, y + 1, defines.direction.east)
+-- Three belts ending at (tx+2, ty). The script removes plates from the last one.
+local function sink(surface, tx, ty)
+  belt(surface, tx, ty)
+  belt(surface, tx + 1, ty)
+  return belt(surface, tx + 2, ty)
+end
+
+-- Three belts starting at (tx, ty). The script places plates at the back of the first one.
+local function source(surface, tx, ty)
+  local first = belt(surface, tx, ty)
+  belt(surface, tx + 1, ty)
+  belt(surface, tx + 2, ty)
+  return first
+end
+
+-- Input at (tx, ty); a splitter sends plates to the drain end at (tx+5, ty+1) first and
+-- everything else out at (tx+5, ty) once the drain stops taking plates and backs up.
+local function sink_with_pass(surface, tx, ty)
+  belt(surface, tx, ty)
+  belt(surface, tx + 1, ty)
+  local splitter = place(surface, "cf-splitter", tx + 2.5, ty + 1, defines.direction.east)
   splitter.splitter_output_priority = "right"
-  belt(surface, x + 3, y)
-  belt(surface, x + 4, y)
-  belt(surface, x + 3, y + 1)
-  belt(surface, x + 4, y + 1)
-  local drain_end = belt(surface, x + 5, y + 1)
-  local landmark = place(surface, s.landmark or "cf-landmark", x + 6.5, y + 1.5)
+  belt(surface, tx + 3, ty)
+  belt(surface, tx + 4, ty)
+  belt(surface, tx + 3, ty + 1)
+  belt(surface, tx + 4, ty + 1)
+  return belt(surface, tx + 5, ty + 1), splitter
+end
+
+local builders = {}
+
+function builders.emitter(surface, s)
   return {
-    landmark = landmark,
-    drain_end = drain_end,
-    splitter = splitter,
-    input_at = { x, y },
-    output_at = { x + 5, y },
+    landmark = chest(surface, "cf-landmark", s.x, s.y),
+    out = source(surface, s.x + 1, s.y),
+    ports = { { s.x + 4, s.y, "OUT >" } },
   }
 end
 
--- in belts → vault chest → out belts.
-local function build_vault(surface, s)
+function builders.cashflow(surface, s)
   local x, y = s.x, s.y
-  belt(surface, x, y)
-  belt(surface, x + 1, y)
-  local in_end = belt(surface, x + 2, y)
-  local chest = place(surface, "cf-vault", x + 3.5, y + 0.5)
-  local out_first = belt(surface, x + 4, y)
-  belt(surface, x + 5, y)
-  belt(surface, x + 6, y)
   return {
-    landmark = chest,
-    chest = chest,
-    in_end = in_end,
-    out_first = out_first,
-    input_at = { x, y },
-    output_at = { x + 7, y },
+    cash_in = sink(surface, x, y),
+    bills_in = sink(surface, x, y + 2),
+    landmark = chest(surface, "cf-landmark", x + 3, y + 1),
+    surplus_out = source(surface, x + 4, y),
+    unpaid_out = source(surface, x + 4, y + 2),
+    ports = {
+      { x, y, "CASH IN >" },
+      { x, y + 2, "BILLS IN >" },
+      { x + 7, y, "SURPLUS OUT >" },
+      { x + 7, y + 2, "UNPAID OUT >" },
+    },
   }
 end
 
-local builders = { source = build_source, drain = build_drain, vault = build_vault }
+function builders.debt(surface, s)
+  local x, y = s.x, s.y
+  local pay_in, splitter = sink_with_pass(surface, x, y + 2)
+  return {
+    borrow_in = sink(surface, x, y),
+    landmark = chest(surface, "cf-ledger", x + 3, y),
+    interest_out = source(surface, x + 4, y),
+    pay_in = pay_in,
+    splitter = splitter,
+    ports = {
+      { x, y, "BORROW IN >" },
+      { x + 7, y, "INTEREST OUT >" },
+      { x, y + 2, "PAY IN >" },
+      { x + 5, y + 2, "PASS OUT >" },
+    },
+  }
+end
+
+function builders.vault(surface, s)
+  local x, y = s.x, s.y
+  local vault = {
+    deposit_in = sink(surface, x, y),
+    return_out = source(surface, x + 4, y),
+    ports = { { x, y, "DEPOSIT IN >" }, { x + 7, y, "RETURNS OUT >" } },
+  }
+  vault.chest = chest(surface, "cf-vault", x + 3, y)
+  vault.landmark = vault.chest
+  return vault
+end
 
 function M.create_surface()
   local surface = game.surfaces[layout.surface] or game.create_surface(layout.surface)

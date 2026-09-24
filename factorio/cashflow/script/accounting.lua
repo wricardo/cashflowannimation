@@ -1,5 +1,5 @@
 -- Pure money math. No Factorio API here so it can be unit-tested with plain Lua.
--- Money is integer cents; one plate is $10.
+-- Money is integer cents. One plate is $10: iron plates are cash, copper plates are bills/debt.
 
 local M = {}
 
@@ -15,64 +15,56 @@ function M.monthly_amount(cents, annual_pct)
   return M.round(cents * (annual_pct / 100 / 12))
 end
 
-function M.quota_plates(dollars)
+function M.plates(dollars)
   return math.ceil(dollars / 10)
 end
 
-function M.plates_for_debt(debt_cents)
-  return math.ceil(debt_cents / M.CENTS_PER_PLATE)
-end
-
--- Plates that should have been emitted by this point of the month, spread evenly.
-function M.paycheck_due(plates_per_month, tick_in_month, ticks_per_month)
+-- How many of `total` plates should have been emitted by this tick, spread evenly over the month.
+function M.due_by_tick(total, tick_in_month, ticks_per_month)
   ticks_per_month = ticks_per_month or M.TICKS_PER_MONTH
   local t = math.min(math.max(tick_in_month, 0), ticks_per_month)
-  return math.floor(plates_per_month * t / ticks_per_month)
+  return math.floor(total * t / ticks_per_month)
 end
 
-function M.close_drain(received, quota)
-  local consumed = math.min(received, quota)
-  return consumed, quota - consumed
+-- One iron plate pays one copper bill.
+function M.match(iron, copper)
+  local paired = math.min(iron, copper)
+  return paired, iron - paired, copper - paired
 end
 
-function M.split_return(return_cents, carry_cents)
-  local total = return_cents + carry_cents
+-- Whole plates from cents, carrying the fraction into next month.
+function M.to_plates(cents, carry_cents)
+  local total = cents + carry_cents
   local plates = math.floor(total / M.CENTS_PER_PLATE)
   return plates, total - plates * M.CENTS_PER_PLATE
 end
 
--- state:  debt_cents, opening_debt_cents, opening_principal_cents, return_carry_cents
--- inputs: needs_received, needs_quota, wants_received, wants_quota, paycheck_emitted, vault_plates
+-- state:  debt_cents, opening_debt_cents, opening_principal_cents, interest_carry_cents, return_carry_cents
+-- inputs: copper_waiting (bills that never made it onto a belt), node_iron, node_copper, vault_plates
 -- rates:  debt_apr, asset_return (annual percent)
 function M.close_month(state, inputs, rates)
-  local needs_consumed, needs_shortfall = M.close_drain(inputs.needs_received, inputs.needs_quota)
-  local wants_consumed, wants_shortfall = M.close_drain(inputs.wants_received, inputs.wants_quota)
+  local debt_cents = state.debt_cents + inputs.copper_waiting * M.CENTS_PER_PLATE
 
-  local deficit_cents = (needs_shortfall + wants_shortfall) * M.CENTS_PER_PLATE
   local interest_cents = M.monthly_amount(state.opening_debt_cents, rates.debt_apr)
-  local debt_cents = state.debt_cents + deficit_cents + interest_cents
+  local interest_plates, interest_carry = M.to_plates(interest_cents, state.interest_carry_cents)
 
   local return_cents = M.monthly_amount(state.opening_principal_cents, rates.asset_return)
-  local return_plates, carry = M.split_return(return_cents, state.return_carry_cents)
-
-  local consumed_plates = needs_consumed + wants_consumed
+  local return_plates, return_carry = M.to_plates(return_cents, state.return_carry_cents)
 
   return {
     debt_cents = debt_cents,
     opening_debt_cents = debt_cents,
     opening_principal_cents = inputs.vault_plates * M.CENTS_PER_PLATE,
-    return_carry_cents = carry,
+    interest_carry_cents = interest_carry,
+    return_carry_cents = return_carry,
     report = {
-      needs_consumed = needs_consumed,
-      wants_consumed = wants_consumed,
-      needs_shortfall = needs_shortfall,
-      wants_shortfall = wants_shortfall,
-      deficit_cents = deficit_cents,
+      collected_plates = inputs.copper_waiting,
+      surplus_plates = inputs.node_iron,
+      unpaid_plates = inputs.node_copper,
       interest_cents = interest_cents,
+      interest_plates = interest_plates,
       return_cents = return_cents,
       return_plates = return_plates,
-      consumed_cents = consumed_plates * M.CENTS_PER_PLATE,
-      cashflow_cents = (inputs.paycheck_emitted - consumed_plates) * M.CENTS_PER_PLATE,
     },
   }
 end
@@ -88,8 +80,7 @@ end
 function M.money(cents)
   local negative = cents < 0
   local dollars = math.floor(math.abs(cents) / 100)
-  local s = tostring(dollars)
-  local out = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+  local out = tostring(dollars):reverse():gsub("(%d%d%d)", "%1,"):reverse()
   if out:sub(1, 1) == "," then
     out = out:sub(2)
   end

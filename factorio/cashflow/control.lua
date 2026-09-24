@@ -9,7 +9,8 @@ local labels = require("script.labels")
 local gui = require("script.gui")
 local guard = require("script.guard")
 
-local SWEEP_TICKS = 6
+-- Every 2 ticks so output belts can be filled at full yellow-belt speed.
+local SWEEP_TICKS = 2
 local REFRESH_TICKS = 30
 
 local function in_our_scenario()
@@ -39,7 +40,7 @@ script.on_init(function()
   end
   local cfg = config.read()
   local surface = world.create_surface()
-  local debt_cents = cfg.starting_debt * 100
+  local debt_cents = acc.plates(cfg.starting_debt) * acc.CENTS_PER_PLATE
   local cf = {
     running = false,
     won = false,
@@ -49,13 +50,12 @@ script.on_init(function()
     debt_cents = debt_cents,
     opening_debt_cents = debt_cents,
     opening_principal_cents = 0,
+    interest_carry_cents = 0,
     return_carry_cents = 0,
-    paycheck_emitted = 0,
-    paycheck_buffer = 0,
-    vault_out_buffer = 0,
-    received = { needs = 0, wants = 0 },
-    debt_paid_plates = 0,
-    deposit_plates = 0,
+    emitted = { paycheck = 0, needs = 0, wants = 0 },
+    out = stations.new_outputs(),
+    node = { iron = 0, copper = 0 },
+    stats = stations.new_month_stats(),
     consumed_total_cents = 0,
     plan = pulse.plan_month(cfg),
     goals = {},

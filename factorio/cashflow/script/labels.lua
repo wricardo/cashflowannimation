@@ -2,11 +2,13 @@ local acc = require("script.accounting")
 
 local M = {}
 
-local PLATE = acc.CENTS_PER_PLATE
 local WHITE = { r = 1, g = 1, b = 1 }
 local GREEN = { r = 0.45, g = 0.9, b = 0.5 }
-local RED = { r = 1, g = 0.45, b = 0.4 }
+local RED = { r = 1, g = 0.55, b = 0.35 }
+local GOLD = { r = 1, g = 0.85, b = 0.4 }
 local GREY = { r = 0.7, g = 0.7, b = 0.7 }
+
+local COLORS = { paycheck = GREEN, needs = RED, wants = RED, cashflow = GOLD, debt = RED, vault = GREEN }
 
 local function text_at(surface, target, text, color, scale)
   return rendering.draw_text({
@@ -24,44 +26,42 @@ local function on_entity(e, dy)
   return { entity = e, offset = { 0, dy } }
 end
 
-local function at_tile(pos)
-  return { pos[1] + 0.5, pos[2] - 0.6 }
-end
-
 function M.create(cf, surface)
-  local e = cf.entities
-  local L = {}
-  L.paycheck = text_at(surface, on_entity(e.paycheck.landmark, -1.4), "", GREEN)
-  L.needs = text_at(surface, on_entity(e.needs.landmark, -1.4), "", RED)
-  L.wants = text_at(surface, on_entity(e.wants.landmark, -1.4), "", RED)
-  L.debt = text_at(surface, on_entity(e.debt.landmark, -1.4), "", RED)
-  L.vault = text_at(surface, on_entity(e.vault.landmark, -1.4), "", GREEN)
-  for key, s in pairs(e) do
-    if s.input_at and key ~= "paycheck" then
-      text_at(surface, at_tile(s.input_at), "IN >", GREY, 1)
+  cf.labels = {}
+  for key, s in pairs(cf.entities) do
+    cf.labels[key] = text_at(surface, on_entity(s.landmark, -1.4), "", COLORS[key] or WHITE)
+    for _, port in ipairs(s.ports) do
+      text_at(surface, { port[1] + 0.5, port[2] - 0.4 }, port[3], GREY, 0.9)
     end
-    text_at(surface, at_tile(s.output_at), "OUT >", GREY, 1)
   end
-  cf.labels = L
 end
 
-local function dollars(plates)
-  return acc.money(plates * PLATE)
+local function d(plates)
+  return acc.money(plates * acc.CENTS_PER_PLATE)
+end
+
+-- Copper stuck in an output buffer is added to debt at month end.
+local function overdue(plates)
+  if plates <= 0 then
+    return ""
+  end
+  return "  unbelted " .. d(plates) .. " -> debt at month end"
 end
 
 function M.refresh(cf, vault_plates)
-  local L, p = cf.labels, cf.plan
+  local L, p, out, node = cf.labels, cf.plan, cf.out, cf.node
   if not L then
     return
   end
-  L.paycheck.text = "PAYCHECK " .. dollars(p.paycheck_plates) .. "/mo  idle " .. dollars(cf.paycheck_buffer)
-  L.needs.text = "NEEDS " .. dollars(cf.received.needs) .. " / " .. dollars(p.needs_quota)
-  L.wants.text = "WANTS " .. dollars(cf.received.wants) .. " / " .. dollars(p.wants_quota)
-  L.debt.text = "DEBT " .. acc.money(cf.debt_cents)
-  L.vault.text = "VAULT " .. dollars(vault_plates) .. "  returns waiting " .. dollars(cf.vault_out_buffer)
+  L.paycheck.text = "PAYCHECK cash " .. d(p.paycheck) .. "/mo" .. (out.paycheck > 0 and ("  waiting " .. d(out.paycheck)) or "")
+  L.needs.text = "NEEDS bills " .. d(p.needs) .. "/mo" .. overdue(out.needs)
+  L.wants.text = "WANTS bills " .. d(p.wants) .. "/mo" .. overdue(out.wants)
+  L.cashflow.text = "CASHFLOW cash " .. d(node.iron) .. "  bills " .. d(node.copper) .. "  paid " .. d(cf.stats.paid) .. overdue(out.unpaid)
+  L.debt.text = "DEBT " .. acc.money(cf.debt_cents) .. overdue(out.interest)
+  L.vault.text = "VAULT " .. d(vault_plates) .. (out.returns > 0 and ("  returns waiting " .. d(out.returns)) or "")
   for _, m in pairs(cf.meters) do
     if m.entity.valid then
-      local text = "METER " .. dollars(m.count) .. " this month, " .. dollars(m.last) .. " last"
+      local text = "METER cash " .. d(m.count.iron) .. " bills " .. d(m.count.copper) .. " (last month " .. d(m.last.iron) .. " / " .. d(m.last.copper) .. ")"
       if m.label and m.label.valid then
         m.label.text = text
       else

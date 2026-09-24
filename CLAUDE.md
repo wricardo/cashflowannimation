@@ -23,7 +23,7 @@ node --test simulation.test.js  # run just this file
 
 ## Factorio mod (`factorio/`)
 
-Playable Factorio 2.0 scenario mod: iron plate = $10 cash, copper plate = debt; the player routes money with belts.
+Playable Factorio 2.0 scenario mod: iron plate = $10 cash, copper plate = $10 bill. Needs/Wants/debt interest emit copper, the Cashflow station cancels iron against copper, and copper into the Debt station is borrowing. The player routes everything with belts.
 
 ```bash
 npm run test:factorio      # plain-Lua tests (accounting + smoke test against tests/fake_factorio.lua)

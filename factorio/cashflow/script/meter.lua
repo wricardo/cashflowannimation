@@ -1,33 +1,39 @@
--- Counts iron plates passing over a player-placed meter belt, using item unique ids.
--- A plate takes ~32 ticks to cross a yellow belt tile, so sampling every 6 ticks sees each one.
+-- Counts plates passing over a player-placed meter belt, using item unique ids.
+-- A plate takes ~32 ticks to cross a yellow belt tile, so frequent sampling sees each one.
 local M = {}
+
+local COUNTED = { ["iron-plate"] = "iron", ["copper-plate"] = "copper" }
 
 local function item_name(entry)
   local s = entry.stack or entry.item
   return s and s.name
 end
 
-local function scan(line, seen_now, seen_before)
+local function scan(line, m, seen_now)
   local ok, contents = pcall(function()
     return line.get_detailed_contents()
   end)
   if not ok or not contents then
-    return 0
+    return
   end
-  local fresh = 0
   for _, entry in pairs(contents) do
-    if item_name(entry) == "iron-plate" then
+    local kind = COUNTED[item_name(entry)]
+    if kind then
       seen_now[entry.unique_id] = true
-      if not seen_before[entry.unique_id] then
-        fresh = fresh + 1
+      if not m.seen[entry.unique_id] then
+        m.count[kind] = m.count[kind] + 1
       end
     end
   end
-  return fresh
 end
 
 function M.add(cf, entity)
-  cf.meters[entity.unit_number] = { entity = entity, seen = {}, count = 0, last = 0 }
+  cf.meters[entity.unit_number] = {
+    entity = entity,
+    seen = {},
+    count = { iron = 0, copper = 0 },
+    last = { iron = 0, copper = 0 },
+  }
 end
 
 function M.remove(cf, entity)
@@ -45,7 +51,7 @@ function M.sweep(cf)
     else
       local seen_now = {}
       for i = 1, 2 do
-        m.count = m.count + scan(m.entity.get_transport_line(i), seen_now, m.seen)
+        scan(m.entity.get_transport_line(i), m, seen_now)
       end
       m.seen = seen_now
     end
@@ -55,7 +61,7 @@ end
 function M.close_month(cf)
   for _, m in pairs(cf.meters) do
     m.last = m.count
-    m.count = 0
+    m.count = { iron = 0, copper = 0 }
   end
 end
 

@@ -17,47 +17,41 @@ function T.asset_return_matches_simulation()
   eq(acc.monthly_amount(1200000, 7), 7000)
 end
 
-function T.quota_rounds_up_to_whole_plates()
-  eq(acc.quota_plates(2000), 200)
-  eq(acc.quota_plates(805), 81)
-  eq(acc.quota_plates(0), 0)
+function T.plates_round_up()
+  eq(acc.plates(2000), 200)
+  eq(acc.plates(805), 81)
+  eq(acc.plates(0), 0)
 end
 
-function T.plates_for_debt_rounds_up()
-  eq(acc.plates_for_debt(0), 0)
-  eq(acc.plates_for_debt(1), 1)
-  eq(acc.plates_for_debt(27000), 27)
-  eq(acc.plates_for_debt(27001), 28)
-end
-
-function T.paycheck_spreads_evenly_and_hits_total()
-  eq(acc.paycheck_due(500, 0), 0)
-  eq(acc.paycheck_due(500, 1800), 250)
-  eq(acc.paycheck_due(500, 3600), 500)
-  eq(acc.paycheck_due(500, 9999), 500)
+function T.emission_spreads_evenly_and_hits_total()
+  eq(acc.due_by_tick(500, 0), 0)
+  eq(acc.due_by_tick(500, 1800), 250)
+  eq(acc.due_by_tick(500, 3600), 500)
+  eq(acc.due_by_tick(500, 9999), 500)
   local prev = 0
-  for t = 6, 3600, 6 do
-    local due = acc.paycheck_due(500, t)
-    assert(due >= prev, "paycheck must never go backwards")
+  for t = 2, 3600, 2 do
+    local due = acc.due_by_tick(500, t)
+    assert(due >= prev, "emission must never go backwards")
     prev = due
   end
 end
 
-function T.close_drain_shortfall()
-  local consumed, shortfall = acc.close_drain(120, 200)
-  eq(consumed, 120)
-  eq(shortfall, 80)
-  consumed, shortfall = acc.close_drain(200, 200)
-  eq(consumed, 200)
-  eq(shortfall, 0)
+function T.one_iron_pays_one_copper()
+  local paired, iron, copper = acc.match(10, 4)
+  eq(paired, 4)
+  eq(iron, 6)
+  eq(copper, 0)
+  paired, iron, copper = acc.match(3, 7)
+  eq(paired, 3)
+  eq(iron, 0)
+  eq(copper, 4)
 end
 
-function T.return_carry_accumulates_fractions()
-  -- $5 return each month = half a plate
-  local plates, carry = acc.split_return(500, 0)
+function T.fractions_carry_into_next_month()
+  local plates, carry = acc.to_plates(500, 0)
   eq(plates, 0)
   eq(carry, 500)
-  plates, carry = acc.split_return(500, carry)
+  plates, carry = acc.to_plates(500, carry)
   eq(plates, 1)
   eq(carry, 0)
 end
@@ -67,56 +61,42 @@ local function default_state()
     debt_cents = 1800000,
     opening_debt_cents = 1800000,
     opening_principal_cents = 1200000,
+    interest_carry_cents = 0,
     return_carry_cents = 0,
   }
 end
 
 local rates = { debt_apr = 18, asset_return = 7 }
 
-function T.month_fully_paid_adds_only_interest()
-  local r = acc.close_month(default_state(), {
-    needs_received = 200, needs_quota = 200,
-    wants_received = 80, wants_quota = 80,
-    paycheck_emitted = 500, vault_plates = 1200,
-  }, rates)
-  eq(r.debt_cents, 1827000)
-  eq(r.opening_debt_cents, 1827000)
-  eq(r.report.deficit_cents, 0)
+function T.interest_is_a_bill_not_added_to_debt()
+  local r = acc.close_month(default_state(), { copper_waiting = 0, node_iron = 0, node_copper = 0, vault_plates = 1200 }, rates)
+  eq(r.debt_cents, 1800000, "debt only grows when copper reaches it")
+  eq(r.report.interest_plates, 27)
   eq(r.report.return_plates, 7)
-  eq(r.return_carry_cents, 0)
-  eq(r.report.cashflow_cents, 220000)
-  eq(r.report.consumed_cents, 280000)
 end
 
-function T.starved_drains_are_borrowed()
-  local r = acc.close_month(default_state(), {
-    needs_received = 150, needs_quota = 200,
-    wants_received = 0, wants_quota = 80,
-    paycheck_emitted = 150, vault_plates = 1200,
-  }, rates)
-  eq(r.report.needs_shortfall, 50)
-  eq(r.report.wants_shortfall, 80)
-  eq(r.report.deficit_cents, 130000)
-  eq(r.debt_cents, 1800000 + 130000 + 27000)
+function T.unbelted_copper_is_charged_to_debt()
+  local r = acc.close_month(default_state(), { copper_waiting = 130, node_iron = 0, node_copper = 0, vault_plates = 1200 }, rates)
+  eq(r.debt_cents, 1800000 + 130000)
+  eq(r.opening_debt_cents, 1930000)
+  eq(r.report.collected_plates, 130)
 end
 
-function T.interest_uses_opening_debt_not_current()
+function T.node_leftovers_become_surplus_and_unpaid()
+  local r = acc.close_month(default_state(), { copper_waiting = 0, node_iron = 220, node_copper = 0, vault_plates = 1200 }, rates)
+  eq(r.report.surplus_plates, 220)
+  eq(r.report.unpaid_plates, 0)
+end
+
+function T.interest_uses_opening_debt()
   local s = default_state()
-  s.debt_cents = 0 -- paid off during the month
-  local r = acc.close_month(s, {
-    needs_received = 200, needs_quota = 200,
-    wants_received = 80, wants_quota = 80,
-    paycheck_emitted = 500, vault_plates = 1200,
-  }, rates)
+  s.debt_cents = 0
+  local r = acc.close_month(s, { copper_waiting = 0, node_iron = 0, node_copper = 0, vault_plates = 1200 }, rates)
   eq(r.report.interest_cents, 27000)
 end
 
 function T.deposits_start_earning_next_month()
-  local r = acc.close_month(default_state(), {
-    needs_received = 200, needs_quota = 200,
-    wants_received = 80, wants_quota = 80,
-    paycheck_emitted = 500, vault_plates = 1400,
-  }, rates)
+  local r = acc.close_month(default_state(), { copper_waiting = 0, node_iron = 0, node_copper = 0, vault_plates = 1400 }, rates)
   eq(r.report.return_cents, 7000)
   eq(r.opening_principal_cents, 1400000)
 end
@@ -125,7 +105,7 @@ function T.financial_independence_requires_zero_debt()
   -- $480,000 at 7% returns exactly $2,800/month
   eq(acc.is_financially_independent(0, 48000000, 7, 2000, 800), true)
   eq(acc.is_financially_independent(0, 47990000, 7, 2000, 800), false)
-  eq(acc.is_financially_independent(100, 48000000, 7, 2000, 800), false)
+  eq(acc.is_financially_independent(1000, 48000000, 7, 2000, 800), false)
 end
 
 function T.money_formatting()

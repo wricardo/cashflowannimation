@@ -1,5 +1,7 @@
--- Money only moves on belts: plates picked up by hand go back into the paycheck buffer,
--- copper is dropped (the ledger re-syncs from the debt balance). Building supplies stay topped up.
+-- Money only moves on belts. Cash picked up by hand goes back to the paycheck; bills picked up
+-- by hand are charged to debt, so mining a belt full of copper doesn't make expenses vanish.
+local acc = require("script.accounting")
+
 local M = {}
 
 local SUPPLIES = {
@@ -16,12 +18,15 @@ function M.check(cf, player)
   local iron = inv.get_item_count("iron-plate")
   if iron > 0 then
     inv.remove({ name = "iron-plate", count = iron })
-    cf.paycheck_buffer = cf.paycheck_buffer + iron
-    player.print("Cash only moves on belts. Returned " .. iron .. " plates to your paycheck.")
+    cf.out.paycheck = cf.out.paycheck + iron
+    player.print("Cash only moves on belts: " .. iron .. " iron plates went back to your paycheck.")
   end
   local copper = inv.get_item_count("copper-plate")
   if copper > 0 then
     inv.remove({ name = "copper-plate", count = copper })
+    cf.debt_cents = cf.debt_cents + copper * acc.CENTS_PER_PLATE
+    cf.stats.picked_copper = cf.stats.picked_copper + copper
+    player.print("Bills only move on belts: " .. copper .. " copper plates were charged to your debt.")
   end
   for _, s in ipairs(SUPPLIES) do
     local have = inv.get_item_count(s.name)
